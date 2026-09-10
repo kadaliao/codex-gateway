@@ -9,7 +9,7 @@
 
 - **聚合模型列表** — 读取 `~/.codex/config.toml` 的 `model_providers`，把各服务的模型追加进 Codex 的模型目录。原模型对象和目录元数据逐字段保留，不重新发现、不重建原 provider 的模型。
 - **不丢功能** — OpenAI 系后端（`api.openai.com` / `chatgpt.com` / 原 Codex provider）按 Responses 原样直通：`web_search`、`computer_use`、图片生成、reasoning items、流式响应全部原封不动转发并流回。
-- **只转必要的一层** — 仅提供 `/v1/chat/completions` 的服务（如 DeepSeek）在网关里做 items ↔ messages 翻译，覆盖文本和 function/tool 调用。这类服务本身没有的能力不会被伪造。支持原生 Responses 的服务走直通。
+- **只转必要的一层** — 仅提供 `/v1/chat/completions` 的服务（如 DeepSeek）在网关里做 items ↔ messages 翻译，覆盖文本、思维链（`reasoning_content`）和 function/tool 调用。这类服务本身没有的能力不会被伪造。支持原生 Responses 的服务走直通。
 - **挑选而不是全塞** — Provider 编辑页「获取模型」支持多关键词搜索、只看已选、选中/取消当前结果；默认只加入选中的模型，也可显式切到「自动加入全部」。服务不提供模型列表时可手动添加。
 - **可逆接入** — 连接期间只临时改当前 provider 的 `base_url`（内置 OpenAI 用 `openai_base_url`）和顶层 `model_catalog_json`，恢复日志在改动之前原子写入。「停止并恢复」或退出应用即撤回；卸载连服务、密钥、日志一起清理。
 - **本机运行** — 只监听 `127.0.0.1`，没有登录启动项、LaunchAgent、系统代理或证书安装；日志不记录对话正文、响应正文和密钥。

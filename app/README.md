@@ -18,7 +18,7 @@ open "build/Codex Gateway.app"
 3. 在 **模型列表** 中检查原模型和新增模型。点击 **连接 Codex**，监听成功后才应用接入设置。
 4. 重新加载 Codex 配置后，在原来的模型选择器中选择模型。
 
-`Responses` 用于支持原生 Responses 的服务。`Chat Completions` 用于只提供该接口的服务，当前覆盖文本和函数工具调用转换，等待完整回复后返回。它不能提供服务本身不支持的 Codex 功能。原 Codex provider 始终使用原生 Responses 路径。
+`Responses` 用于支持原生 Responses 的服务。`Chat Completions` 用于只提供该接口的服务，当前覆盖文本、思维链和函数工具调用转换，等待完整回复后返回。它不能提供服务本身不支持的 Codex 功能。原 Codex provider 始终使用原生 Responses 路径。
 
 ## 原配置如何保留
 
@@ -51,7 +51,7 @@ open "build/Codex Gateway.app"
 swift test --package-path app
 ```
 
-测试使用临时目录和本地模拟上游：原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析、自定义服务的工具调用顺序规范化。不会修改真实 Codex 配置或调用付费模型。
+测试使用临时目录和本地模拟上游：原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析、自定义服务的工具调用顺序规范化、思维链往返。不会修改真实 Codex 配置或调用付费模型。
 
 `CODEX_HOME` 可指定隔离的 Codex 配置目录；`CODEX_GATEWAY_HOME` 可指定隔离的 Gateway 数据目录。构建应用采用 ad-hoc 签名，没有 Developer ID 或公证。
 

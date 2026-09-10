@@ -164,4 +164,93 @@ final class GatewayRuntimeTests: XCTestCase {
         XCTAssertEqual(messages[1]["role"] as? String, "user")
     }
 
+    // ---------------- Reasoning round trip (DeepSeek thinking mode) ----------------
+    func testChatReplyTurnsReasoningContentIntoOneReplayableItem() {
+        let chat: [String: Any] = ["choices": [["message": [
+            "content": "",
+            "reasoning_content": "I should list the directory first.",
+            "tool_calls": [["id": "call_1", "type": "function",
+                            "function": ["name": "shell", "arguments": #"{"cmd":"ls"}"#]]],
+        ]]]]
+        let response = ResponseTranslation.chatResponse(chat, model: "deepseek-flash")
+        let items = response["output"] as! [[String: Any]]
+
+        XCTAssertEqual(items.map { $0["type"] as? String }, ["reasoning", "function_call"])
+        let summary = items[0]["summary"] as! [[String: Any]]
+        XCTAssertEqual(summary.first?["text"] as? String, "I should list the directory first.")
+        XCTAssertEqual(items[1]["call_id"] as? String, "call_1")
+
+        // Codex replays what it received; the tool-call turn must still carry the thinking.
+        let replayed: [String: Any] = ["input": [items[0], items[1],
+                                                 ["type": "function_call_output", "call_id": "call_1", "output": "ok"]]]
+        let messages = ResponseTranslation.responsesToMessages(replayed) as! [[String: Any]]
+        let assistant = messages[0]
+        XCTAssertEqual(assistant["role"] as? String, "assistant")
+        XCTAssertEqual(assistant["reasoning_content"] as? String, "I should list the directory first.")
+        XCTAssertEqual((assistant["tool_calls"] as? [Any])?.count, 1)
+        XCTAssertEqual(messages[1]["role"] as? String, "tool")
+    }
+
+    func testChatTranslationKeepsTextReasoningAndToolCallsInOneAssistantTurn() {
+        let body: [String: Any] = ["input": [
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "hi"]]],
+            ["type": "reasoning", "summary": [["type": "summary_text", "text": "think"]]],
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "running it"]]],
+            ["type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{}"],
+            ["type": "function_call_output", "call_id": "call_1", "output": "ok"],
+        ]]
+        let messages = ResponseTranslation.responsesToMessages(body) as! [[String: Any]]
+
+        XCTAssertEqual(messages.map { $0["role"] as? String }, ["user", "assistant", "tool"])
+        XCTAssertEqual(messages[1]["content"] as? String, "running it")
+        XCTAssertEqual(messages[1]["reasoning_content"] as? String, "think")
+        XCTAssertEqual((messages[1]["tool_calls"] as? [Any])?.count, 1)
+    }
+
+    func testChatTranslationKeepsReasoningOnATextOnlyTurnWithoutToolCalls() {
+        let body: [String: Any] = ["input": [
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "hi"]]],
+            ["type": "reasoning", "summary": [["type": "summary_text", "text": "think"]]],
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "answer"]]],
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "again"]]],
+        ]]
+        let messages = ResponseTranslation.responsesToMessages(body) as! [[String: Any]]
+
+        XCTAssertEqual(messages.map { $0["role"] as? String }, ["user", "assistant", "user"])
+        XCTAssertEqual(messages[1]["content"] as? String, "answer")
+        XCTAssertEqual(messages[1]["reasoning_content"] as? String, "think")
+        XCTAssertNil(messages[1]["tool_calls"])
+        // A dropped reasoning turn must not leak into the next user message.
+        XCTAssertNil(messages[2]["reasoning_content"])
+    }
+
+    func testReasoningThatPrecedesAMissingTurnIsNotFabricatedAsAMessage() {
+        let body: [String: Any] = ["input": [
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "hi"]]],
+            ["type": "reasoning", "summary": [["type": "summary_text", "text": "think"]]],
+        ]]
+        let messages = ResponseTranslation.responsesToMessages(body) as! [[String: Any]]
+        XCTAssertEqual(messages.map { $0["role"] as? String }, ["user"])
+    }
+
+    func testBackfillCoversAssistantTurnsWhoseReasoningWasLost() {
+        let messages: [Any] = [
+            ["role": "system", "content": "s"],
+            ["role": "user", "content": "hi"],
+            ["role": "assistant", "content": "", "tool_calls": [["id": "call_1"]]],
+            ["role": "tool", "tool_call_id": "call_1", "content": "ok"],
+            ["role": "assistant", "content": "done", "reasoning_content": "kept"],
+        ]
+        let filled = ResponseTranslation.backfillReasoningContent(messages) as! [[String: Any]]
+
+        XCTAssertEqual(filled[2]["reasoning_content"] as? String, "")
+        XCTAssertEqual(filled[4]["reasoning_content"] as? String, "kept")
+        XCTAssertNil(filled[0]["reasoning_content"])
+        XCTAssertNil(filled[1]["reasoning_content"])
+        XCTAssertNil(filled[3]["reasoning_content"])
+        // tool_calls preserved, tools-lacking assistants unchanged
+        XCTAssertEqual((filled[2]["tool_calls"] as? [Any])?.count, 1)
+        XCTAssertNil(filled[4]["tool_calls"])
+    }
+
 }

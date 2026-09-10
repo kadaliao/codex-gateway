@@ -135,7 +135,10 @@ final class GatewayRouter: @unchecked Sendable {
                       incoming: HTTPServer.Request, response: HTTPConnection) async throws {
         var payload: [String: Any] = ["model": model, "messages": ResponseTranslation.responsesToMessages(body), "stream": false]
         let tools = ResponseTranslation.responsesToChatTools(body)
-        if !tools.isEmpty { payload["tools"] = tools }
+        if !tools.isEmpty {
+            payload["tools"] = tools
+            payload["messages"] = ResponseTranslation.backfillReasoningContent(payload["messages"] as! [Any])
+        }
         for key in ["temperature", "top_p", "parallel_tool_calls"] { if let value = body[key] { payload[key] = value } }
         if let value = body["max_output_tokens"] ?? body["max_tokens"] { payload["max_tokens"] = value }
         let request = try upstreamRequest(provider, incoming: incoming, body: JSONSerialization.data(withJSONObject: payload), suffix: "/chat/completions")

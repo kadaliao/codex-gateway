@@ -432,4 +432,86 @@ final class GatewayIntegrationTests: XCTestCase {
         XCTAssertEqual(router.lookup("original").0?.id, "base")
     }
 
+    /// A real Codex turn against a mock Chat Completions upstream that enforces
+    /// DeepSeek's thinking-mode rule: while `tools` are sent, the assistant turn
+    /// with the tool call must carry `reasoning_content` back, and Codex itself
+    /// has to replay the reasoning item it received.
+    func testChatTranslationCarriesThinkingThroughARealCodexToolTurn() async throws {
+        let binary = "/Applications/Codex.app/Contents/Resources/codex"
+        guard FileManager.default.isExecutableFile(atPath: binary) else { throw XCTSkip("Codex app is not installed") }
+        let recorded = ReasoningRecorder()
+        let upstream = try HTTPServer(port: 0) { request, response in
+            guard let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let messages = body["messages"] as? [[String: Any]] else {
+                try? await response.json(400, ["error": ["message": "unparseable"]]); return
+            }
+            recorded.add(body)
+            let hasTools = (body["tools"] as? [Any])?.isEmpty == false
+            if hasTools {
+                for m in messages where (m["role"] as? String) == "assistant" && m["reasoning_content"] == nil {
+                    try? await response.json(400, ["error": ["message":
+                        "The `reasoning_content` in the thinking mode must be passed back to the API."]]); return
+                }
+            }
+            let answered = messages.contains { ($0["role"] as? String) == "tool" }
+            let message: [String: Any] = answered
+                ? ["role": "assistant", "content": "THINKING-ROUNDTRIP-OK"]
+                : ["role": "assistant", "content": "", "reasoning_content": "I will read marker.txt.",
+                   "tool_calls": [["id": "call_1", "type": "function",
+                                   "function": ["name": "exec_command", "arguments": #"{"cmd":"cat marker.txt"}"#]]]]
+            try? await response.json(200, ["choices": [["index": 0, "message": message]],
+                                           "usage": ["prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2]])
+        }
+        try await upstream.start()
+        var provider = ProviderConfig(id: "probe", name: "Probe",
+                                      baseURL: "http://127.0.0.1:\(upstream.port)/v1",
+                                      bearerToken: "key", isCustom: true)
+        provider.wireAPI = "chat"
+        let snapshot = try ModelCatalog.merge(original: ["models": []], custom: ["probe": ["deepseek-flash"]])
+        let gateway = try GatewayRuntime(providers: ["probe": provider], activeProvider: "probe", port: 0, snapshot: snapshot)
+        try await gateway.start()
+
+        let dir = try directory(), catalog = dir.appendingPathComponent("models.json")
+        try JSONSerialization.data(withJSONObject: snapshot.document).write(to: catalog)
+        try "MARKER\n".write(to: dir.appendingPathComponent("marker.txt"), atomically: true, encoding: .utf8)
+        let config: String = "model = \"deepseek-flash\"\nmodel_provider = \"probe\"\n"
+            + "model_catalog_json = \(CodexConfigWriter.quote(catalog.path))\n"
+            + "[model_providers.probe]\nname = \"Probe\"\nbase_url = \"http://127.0.0.1:\(gateway.port)/v1\"\nwire_api = \"responses\"\n"
+        try config.write(to: dir.appendingPathComponent("config.toml"), atomically: true, encoding: String.Encoding.utf8)
+
+        let process = Process(), output = Pipe(), errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["exec", "--ephemeral", "--skip-git-repo-check", "--json", "-s", "read-only",
+                             "-m", "deepseek-flash", "Read marker.txt with exec_command, then answer."]
+        var environment = ProcessInfo.processInfo.environment
+        environment["CODEX_HOME"] = dir.path
+        process.environment = environment
+        process.currentDirectoryURL = dir
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output; process.standardError = errors
+        try process.run()
+        let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 90, execute: timeout)
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit(); timeout.cancel()
+        await gateway.stop(); await upstream.stop()
+
+        let stderr = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let tail = String(stderr.suffix(1000))
+        XCTAssertEqual(process.terminationStatus, 0, tail)
+        XCTAssertGreaterThanOrEqual(recorded.all.count, 2, "Codex never replayed the tool-call turn")
+        let assistant = (recorded.all.last?["messages"] as? [[String: Any]])?.first { ($0["role"] as? String) == "assistant" }
+        XCTAssertEqual(assistant?["reasoning_content"] as? String, "I will read marker.txt.")
+        XCTAssertEqual((assistant?["tool_calls"] as? [Any])?.count, 1)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("THINKING-ROUNDTRIP-OK"))
+    }
+
+}
+
+/// Collects the chat-completions bodies an upstream receives across threads.
+final class ReasoningRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [[String: Any]] = []
+    func add(_ body: [String: Any]) { lock.lock(); storage.append(body); lock.unlock() }
+    var all: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return storage }
 }

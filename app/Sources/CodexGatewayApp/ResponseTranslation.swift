@@ -23,6 +23,10 @@ enum ResponseTranslation {
         return ""
     }
 
+    /// One Chat Completions assistant message is one model turn: visible text,
+    /// thinking and tool calls live in the same object. DeepSeek's thinking mode
+    /// rejects a request that carries `tools` unless each replayed turn still has
+    /// its `reasoning_content`, so reasoning has to survive the round trip.
     static func responsesToMessages(_ body: [String: Any]) -> [Any] {
         var messages: [Any] = []
         if let instructions = body["instructions"] {
@@ -32,15 +36,32 @@ enum ResponseTranslation {
             if !text.isEmpty { messages.append(["role": "system", "content": text]) }
         }
 
-        var pendingAssistant: [String: Any]? = nil
+        var assistant: [String: Any]? = nil
+        var pendingReasoning: String? = nil
+
+        func turn() -> [String: Any] {
+            var current = assistant ?? ["role": "assistant", "content": ""]
+            if let reasoning = pendingReasoning {
+                current["reasoning_content"] = reasoning
+                pendingReasoning = nil
+            }
+            assistant = current
+            return current
+        }
 
         func flush() {
-            if let a = pendingAssistant {
-                let hasContent = !((a["content"] as? String) ?? "").isEmpty
-                let hasTools = !((a["tool_calls"] as? [Any]) ?? []).isEmpty
-                if hasContent || hasTools { messages.append(a) }
-                pendingAssistant = nil
+            guard let current = assistant else { return }
+            var a = current
+            if let reasoning = pendingReasoning {
+                a["reasoning_content"] = reasoning
+                pendingReasoning = nil
             }
+            let hasContent = !((a["content"] as? String) ?? "").isEmpty
+            let hasReasoning = !((a["reasoning_content"] as? String) ?? "").isEmpty
+            let hasTools = !((a["tool_calls"] as? [Any]) ?? []).isEmpty
+            if !hasTools { a.removeValue(forKey: "tool_calls") }
+            if hasContent || hasReasoning || hasTools { messages.append(a) }
+            assistant = nil
         }
 
         let input = body["input"]
@@ -54,16 +75,23 @@ enum ResponseTranslation {
             guard let it = item as? [String: Any] else { continue }
             switch (it["type"] as? String) ?? (it["role"] != nil ? "message" : "") {
             case "message":
-                flush()
                 let inputRole = (it["role"] as? String) ?? "user"
                 let role = inputRole == "developer" ? "system" : inputRole
-                messages.append(["role": role, "content": extractText(it["content"])])
-            case "function_call":
-                if pendingAssistant == nil {
-                    pendingAssistant = ["role": "assistant", "content": "", "tool_calls": [Any]()]
+                if role == "assistant" {
+                    var a = turn()
+                    let text = extractText(it["content"])
+                    let existing = (a["content"] as? String) ?? ""
+                    if !text.isEmpty { a["content"] = existing.isEmpty ? text : existing + "\n" + text }
+                    assistant = a
+                } else {
+                    flush()
+                    pendingReasoning = nil
+                    messages.append(["role": role, "content": extractText(it["content"])])
                 }
+            case "function_call":
+                var a = turn()
                 let callID = (it["call_id"] as? String) ?? (it["id"] as? String) ?? "call_\(messages.count)"
-                var tools = (pendingAssistant!["tool_calls"] as? [Any]) ?? []
+                var tools = (a["tool_calls"] as? [Any]) ?? []
                 tools.append([
                     "id": callID,
                     "type": "function",
@@ -72,7 +100,8 @@ enum ResponseTranslation {
                         "arguments": (it["arguments"] as? String) ?? "{}",
                     ],
                 ])
-                pendingAssistant?["tool_calls"] = tools
+                a["tool_calls"] = tools
+                assistant = a
             case "function_call_output":
                 flush()
                 let callID = (it["call_id"] as? String) ?? (it["id"] as? String) ?? ""
@@ -92,15 +121,27 @@ enum ResponseTranslation {
                 } else if let s = it["summary"] as? String {
                     text = s
                 }
-                if !text.isEmpty && pendingAssistant == nil {
-                    pendingAssistant = ["role": "assistant", "content": text, "tool_calls": [Any]()]
-                }
+                if !text.isEmpty { pendingReasoning = text }
             default:
                 break
             }
         }
         flush()
         return messages
+    }
+
+    /// DeepSeek's thinking mode rejects any request that carries `tools` while an
+    /// assistant message in the history has no `reasoning_content` — including
+    /// turns that never called a tool. Real thinking is carried by
+    /// ``responsesToMessages(_:)``; this only backfills history whose reasoning a
+    /// client already dropped, where an empty value is all that can be recovered.
+    static func backfillReasoningContent(_ messages: [Any]) -> [Any] {
+        messages.map { message in
+            guard var m = message as? [String: Any], (m["role"] as? String) == "assistant",
+                  m["reasoning_content"] == nil else { return message }
+            m["reasoning_content"] = ""
+            return m
+        }
     }
 
     /// Third-party Responses backends pair a `function_call` with its
@@ -164,6 +205,13 @@ enum ResponseTranslation {
 
     static func chatToResponseItems(_ msg: [String: Any]) -> [[String: Any]] {
         var items: [[String: Any]] = []
+        if let reasoning = msg["reasoning_content"] as? String, !reasoning.isEmpty {
+            items.append([
+                "type": "reasoning",
+                "id": "reason_\(UUID().uuidString)",
+                "summary": [["type": "summary_text", "text": reasoning]],
+            ])
+        }
         let text = extractText(msg["content"])
         if !text.isEmpty {
             items.append([
