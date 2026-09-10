@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release (e.g. v0.2.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS app
+    runs-on: macos-14
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install zstd
+        run: brew install zstd
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version
+
+      - name: Run tests
+        working-directory: app
+        run: swift test
+
+      - name: Build .app bundle
+        working-directory: app
+        run: ./build-app.sh
+
+      - name: Package artifact
+        id: package
+        working-directory: app
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_TAG"
+          VERSION="${VERSION#v}"
+          APP="build/Codex Gateway.app"
+          test -d "$APP"
+          ZIP="CodexGateway-${VERSION}-macos.zip"
+          ditto -c -k --norsrc --noextattr --keepParent "$APP" "$ZIP"
+          shasum -a 256 "$ZIP" > "$ZIP.sha256"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "sha=$ZIP.sha256" >> "$GITHUB_OUTPUT"
+          ls -lh "$ZIP" "$ZIP.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexGateway-macos
+          path: |
+            app/CodexGateway-*.zip
+            app/CodexGateway-*.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Codex Gateway ${{ env.RELEASE_TAG }}
+          files: |
+            app/CodexGateway-*.zip
+            app/CodexGateway-*.zip.sha256
+          generate_release_notes: true
+          body: |
+            ## 安装
+
+            1. 下载 `CodexGateway-*-macos.zip`，解压得到 `Codex Gateway.app`
+            2. 把 App 拖进「应用程序」文件夹
+            3. 首次打开：**右键点 App → 打开 → 再点「打开」**
+
+            这个构建是 ad-hoc 签名的，没有 Apple Developer ID 公证，所以 macOS 第一次会拦。
+            右键打开一次之后就不再提示。
+
+            如果提示「已损坏，无法打开」，在终端执行：
+
+            ```
+            xattr -dr com.apple.quarantine "/Applications/Codex Gateway.app"
+            ```
+
+            ## 校验
+
+            下载 `.sha256` 文件后校验：
+
+            ```
+            shasum -a 256 -c CodexGateway-*-macos.zip.sha256
+            ```
+
+            ## 系统要求
+
+            macOS 13 (Ventura) 或更高版本，Apple Silicon 与 Intel 均可。

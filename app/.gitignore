@@ -6,3 +6,7 @@ DerivedData/
 
 # Generated icon intermediates (kept: CodexGatewayApp.icns, icon-1024.png)
 Resources/*.iconset/
+
+# Release packaging output
+CodexGateway-*.zip
+CodexGateway-*.zip.sha256

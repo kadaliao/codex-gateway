@@ -2,6 +2,20 @@
 
 **macOS 原生应用**：完整使用、构建与卸载说明见 [app/README.md](app/README.md)。
 
+## 下载安装
+
+从 [Releases](https://github.com/kadaliao/codex-gateway/releases) 下载最新的
+`CodexGateway-<版本>-macos.zip`，解压后把 `Codex Gateway.app` 拖进「应用程序」。
+
+构建是 ad-hoc 签名的，没有 Apple Developer ID 公证，所以 macOS 首次打开会拦。**右键点 App → 打开 → 再点「打开」**，
+一次之后不再提示。若提示「已损坏，无法打开」：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Codex Gateway.app"
+```
+
+需要 macOS 13 (Ventura) 或更高版本。
+
 让 Codex 在**一个模型选择器里跨 Provider 选模型**（OpenAI / DeepSeek / qwen / Ollama / LM Studio …）。
 它读取本地 Codex 配置 `~/.codex/config.toml` 里的 `model_providers`，把它们聚合成一个 Codex 眼中的「Provider」，
 并保留原模型目录和原连接能力。
@@ -41,3 +55,14 @@ swift test --package-path app
 
 测试使用临时目录和本地模拟上游，覆盖原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、
 HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析，不会修改真实 Codex 配置或调用付费模型。
+
+## 发布
+
+推送 `v*` 形式的 tag 会触发 [release workflow](.github/workflows/release.yml)：
+在 macOS runner 上跑测试、构建 `.app`、打包成 zip 并附上 SHA-256 校验文件，最后发布到 GitHub Releases。
+
+```bash
+git tag v0.2.2 && git push origin v0.2.2
+```
+
+也可以到 Actions 页面手动触发 `workflow_dispatch`，填一个已存在的 tag。
