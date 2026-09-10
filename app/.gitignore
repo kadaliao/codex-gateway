@@ -3,3 +3,6 @@ build/
 .swiftpm/
 *.xcodeproj/
 DerivedData/
+
+# Generated icon intermediates (kept: CodexGatewayApp.icns, icon-1024.png)
+Resources/*.iconset/
