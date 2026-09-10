@@ -101,4 +101,4 @@ jobs:
 
             ## 系统要求
 
-            macOS 13 (Ventura) 或更高版本，Apple Silicon 与 Intel 均可。
+            macOS 13 (Ventura) 或更高版本，Apple Silicon（M 系列）。

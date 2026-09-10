@@ -14,7 +14,8 @@
 xattr -dr com.apple.quarantine "/Applications/Codex Gateway.app"
 ```
 
-需要 macOS 13 (Ventura) 或更高版本。
+需要 macOS 13 (Ventura) 或更高版本，Apple Silicon（M 系列）。在 Intel Mac 上请从源码构建，
+构建前先安装 Homebrew 的 zstd。
 
 让 Codex 在**一个模型选择器里跨 Provider 选模型**（OpenAI / DeepSeek / qwen / Ollama / LM Studio …）。
 它读取本地 Codex 配置 `~/.codex/config.toml` 里的 `model_providers`，把它们聚合成一个 Codex 眼中的「Provider」，
