@@ -1,0 +1,39 @@
+# codex-gateway
+
+**macOS 原生应用**：完整使用、构建与卸载说明见 [app/README.md](app/README.md)。
+
+让 Codex 在**一个模型选择器里跨 Provider 选模型**（OpenAI / DeepSeek / qwen / Ollama / LM Studio …）。
+它读取本地 Codex 配置 `~/.codex/config.toml` 里的 `model_providers`，把它们聚合成一个 Codex 眼中的「Provider」，
+并保留原模型目录和原连接能力。
+
+```
+codex ── /v1/models  ──▶  gateway ──  聚合 ~/.codex/config.toml 的 model_providers
+      ── /v1/responses─▶  路由   ──  openai   : Responses 直通（保留全部功能）
+                                  ├─ deepseek : 转 /v1/chat/completions 再翻译回 Codex
+                                  └─ 其它     : 同上
+```
+
+## 为什么「不丢功能」
+
+最关键的判断：凡是 OpenAI 系后端（`api.openai.com` / `chatgpt.com` / 原 Codex provider），
+网关把它当作 Responses 后端做原样直通——`web_search`、`computer_use`、图片生成、reasoning items、流式，全部原封不动转发并流回。
+
+只有 DeepSeek 这类只提供 `/v1/chat/completions` 的后端，才走 items↔messages 翻译（文本 + function/tool 调用）。
+这类模型本来也不支持 computer_use / 图片生成，所以不是「丢了」，而是它自身没有这些能力。
+
+## macOS App
+
+构建和使用步骤见 [app/README.md](app/README.md)。应用提供 Provider 编辑、模型选择、实时日志、停止恢复和卸载，
+关闭主窗口后可从菜单栏重新打开；退出应用会先恢复 Codex。
+
+内置 `ollama`、`lmstudio` 和 `amazon-bedrock` 暂不支持透明接入，连接前会被拒绝。标准 HTTP(S) 自定义 provider
+和内置 OpenAI 受支持。
+
+## 验证
+
+```bash
+swift test --package-path app
+```
+
+测试使用临时目录和本地模拟上游，覆盖原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、
+HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析，不会修改真实 Codex 配置或调用付费模型。
