@@ -28,6 +28,62 @@ final class GatewayRuntimeTests: XCTestCase {
         XCTAssertEqual(last["tool_call_id"] as? String, "call_1")
     }
 
+    func testToolCallOrderNormalizationMovesInterleavedTextBeforeItsCall() {
+        let items: [Any] = [
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "hi"]]],
+            ["type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{}"],
+            ["type": "message", "id": "msg_text", "role": "assistant",
+             "content": [["type": "output_text", "text": "running the command"]]],
+            ["type": "function_call_output", "call_id": "call_1", "output": "ok"],
+        ]
+        let normalized = ResponseTranslation.normalizeToolCallOrder(["input": items])["input"] as! [[String: Any]]
+
+        XCTAssertEqual(normalized.map { $0["type"] as? String },
+                       ["message", "message", "function_call", "function_call_output"])
+        XCTAssertEqual(normalized[1]["role"] as? String, "assistant")
+        XCTAssertEqual(normalized[1]["id"] as? String, "msg_text")
+        XCTAssertEqual(normalized[2]["call_id"] as? String, "call_1")
+        XCTAssertEqual(normalized[3]["call_id"] as? String, "call_1")
+    }
+
+    func testToolCallOrderNormalizationMovesTextBeforeEveryCallOfTheGroup() {
+        let items: [Any] = [
+            ["type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{}"],
+            ["type": "function_call", "call_id": "call_2", "name": "shell", "arguments": "{}"],
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "both"]]],
+            ["type": "function_call_output", "call_id": "call_1", "output": "a"],
+            ["type": "function_call_output", "call_id": "call_2", "output": "b"],
+        ]
+        let normalized = ResponseTranslation.normalizeToolCallOrder(["input": items])["input"] as! [[String: Any]]
+
+        XCTAssertEqual(normalized.map { $0["type"] as? String },
+                       ["message", "function_call", "function_call", "function_call_output", "function_call_output"])
+        XCTAssertEqual(normalized[0]["role"] as? String, "assistant")
+        XCTAssertEqual([normalized[1]["call_id"] as? String, normalized[2]["call_id"] as? String], ["call_1", "call_2"])
+    }
+
+    func testToolCallOrderNormalizationLeavesOtherHistoryAlone() {
+        // Canonical pairs, text already preceding a call, a user turn in between,
+        // and a call whose output is missing must all pass through untouched.
+        let items: [Any] = [
+            ["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "first"]]],
+            ["type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{}"],
+            ["type": "function_call_output", "call_id": "call_1", "output": "ok"],
+            ["type": "function_call", "call_id": "call_2", "name": "shell", "arguments": "{}"],
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "steer"]]],
+            ["type": "function_call_output", "call_id": "call_2", "output": "ok"],
+            ["type": "function_call", "call_id": "call_3", "name": "shell", "arguments": "{}"],
+        ]
+        let normalized = ResponseTranslation.normalizeToolCallOrder(["input": items])["input"] as! [Any]
+
+        XCTAssertEqual(normalized.map { ($0 as! [String: Any])["call_id"] as? String ?? "?" },
+                       ["?", "call_1", "call_1", "call_2", "?", "call_2", "call_3"])
+        XCTAssertEqual(normalized.map { ($0 as! [String: Any])["role"] as? String ?? "-" },
+                       ["assistant", "-", "-", "-", "user", "-", "-"])
+        XCTAssertEqual(ResponseTranslation.normalizeToolCallOrder(["input": "plain string"])["input"] as? String,
+                       "plain string")
+    }
+
     func testResponsesToChatToolsMapsFunctionOnly() {
         let body: [String: Any] = [
             "tools": [

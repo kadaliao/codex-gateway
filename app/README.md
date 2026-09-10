@@ -28,6 +28,7 @@ open "build/Codex Gateway.app"
 - 连接期间只临时改当前 provider 的 `base_url`（内置 OpenAI 使用 `openai_base_url`）和顶层 `model_catalog_json`。恢复日志保存在 `CODEX_HOME/.codex-gateway/connection.json`，在修改前原子写入。
 - 停止恢复只撤回 Gateway 拥有的字段；运行期间的其他配置编辑会保留。恢复失败时保留网关和恢复日志，显示错误。
 - 原服务保留 Codex 提供的认证、请求正文、请求元数据、流式响应与 WebSocket 消息。自定义服务仅使用自己的认证，不继承原服务凭据。
+- 发往**自定义服务**的历史会做一次顺序规范化：把夹在函数调用与其输出之间的助手文本移到调用之前。模型同时返回文本和工具调用时，Codex 会依次发出调用、文本、输出；部分第三方 Responses 网关按位置配对两者，会误报 `No tool output found for tool call …`。原 Codex provider 的请求正文与顺序仍原样转发。
 - 监听仅绑定 `127.0.0.1`。没有登录启动项、LaunchAgent、系统代理或证书安装。
 
 **Codex 的目录在启动时加载。** 首次接入、新增模型或停止接入后，已经运行的 Codex 可能需要重新加载配置。不能承诺现有 Codex 进程即时更新模型或连接；应用不会强制重启 Codex。其他配置 profile 若覆盖 provider/目录，需要单独评估，本应用只接入用户级当前配置。保留原 provider ID 能避免由 Gateway 切换 provider 导致的任务过滤变化。
@@ -50,7 +51,7 @@ open "build/Codex Gateway.app"
 swift test --package-path app
 ```
 
-测试使用临时目录和本地模拟上游：原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析。不会修改真实 Codex 配置或调用付费模型。
+测试使用临时目录和本地模拟上游：原目录完整保留、名称冲突、配置恢复/并发编辑、旧配置迁移、卸载、HTTP 状态和认证隔离、SSE 首包、WebSocket 原生事件、大请求与 chunked 解析、自定义服务的工具调用顺序规范化。不会修改真实 Codex 配置或调用付费模型。
 
 `CODEX_HOME` 可指定隔离的 Codex 配置目录；`CODEX_GATEWAY_HOME` 可指定隔离的 Gateway 数据目录。构建应用采用 ad-hoc 签名，没有 Developer ID 或公证。
 

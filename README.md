@@ -21,6 +21,10 @@ codex ── /v1/models  ──▶  gateway ──  聚合 ~/.codex/config.toml 
 只有 DeepSeek 这类只提供 `/v1/chat/completions` 的后端，才走 items↔messages 翻译（文本 + function/tool 调用）。
 这类模型本来也不支持 computer_use / 图片生成，所以不是「丢了」，而是它自身没有这些能力。
 
+发往**自定义服务**的历史在转发前还会做一次顺序规范化：把夹在函数调用与其输出之间的助手文本移到调用之前。
+模型同时返回文本和工具调用时，Codex 会依次发出调用、文本、输出；部分第三方 Responses 网关按位置配对两者，
+会误报 `No tool output found for tool call …`。原 Codex provider 的请求正文与顺序仍原样转发。
+
 ## macOS App
 
 构建和使用步骤见 [app/README.md](app/README.md)。应用提供 Provider 编辑、模型选择、实时日志、停止恢复和卸载，

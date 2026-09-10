@@ -172,6 +172,50 @@ final class GatewayIntegrationTests: XCTestCase {
         XCTAssertTrue((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "content-type")?.contains("application/json") == true)
         await gateway.stop(); await upstream.stop()
     }
+    func testCustomUpstreamReceivesContiguousToolCallPairsWhileOriginalKeepsCodexOrder() async throws {
+        // Models that answer with text plus a tool call make Codex send
+        // call → assistant text → output; third-party gateways reject that shape.
+        let history: [[String: Any]] = [
+            ["type": "message", "role": "user", "content": [["type": "input_text", "text": "hi"]]],
+            ["type": "function_call", "id": "call_1", "call_id": "call_1", "name": "shell", "arguments": "{}"],
+            ["type": "message", "id": "msg_text", "role": "assistant",
+             "content": [["type": "output_text", "text": "running"]]],
+            ["type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "ok"],
+        ]
+        let upstream = try HTTPServer(port: 0) { request, response in
+            let body = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+            let items = body?["input"] as? [[String: Any]] ?? []
+            if body?["model"] as? String == "added" {
+                XCTAssertEqual(items.map { $0["type"] as? String },
+                               ["message", "message", "function_call", "function_call_output"])
+                XCTAssertEqual(items[1]["role"] as? String, "assistant")
+                XCTAssertEqual(items[1]["id"] as? String, "msg_text")
+                XCTAssertEqual(items[2]["call_id"] as? String, "call_1")
+                XCTAssertEqual(items[3]["call_id"] as? String, "call_1")
+            } else {
+                XCTAssertEqual(items.map { $0["type"] as? String },
+                               ["message", "function_call", "message", "function_call_output"])
+            }
+            try? await response.json(200, ["ok": true])
+        }
+        try await upstream.start()
+        let custom = ProviderConfig(id: "custom", name: "Custom",
+                                    baseURL: "http://127.0.0.1:\(upstream.port)/v1",
+                                    bearerToken: "key", isCustom: true)
+        let original = ProviderConfig(id: "base", name: "Base", baseURL: "http://127.0.0.1:\(upstream.port)/v1")
+        let gateway = try GatewayRuntime(providers: ["custom": custom, "base": original],
+                                         activeProvider: "base", port: 0, snapshot: try snapshot())
+        try await gateway.start()
+        for model in ["added", "original"] {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(gateway.port)/v1/responses")!)
+            request.httpMethod = "POST"
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["model": model, "input": history])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["ok"] as? Bool, true)
+        }
+        await gateway.stop(); await upstream.stop()
+    }
     func testLargeFragmentedAndChunkedRequest() async throws {
         let completed = expectation(description: "parsed full chunked body")
         let server = try HTTPServer(port: 0) { request, response in

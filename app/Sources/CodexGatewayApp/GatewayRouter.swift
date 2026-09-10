@@ -68,6 +68,9 @@ final class GatewayRouter: @unchecked Sendable {
             var body = req.body
             if provider.isCustom, var object {
                 object["model"] = bare
+                // Chat-only backends and third-party Responses gateways pair a tool
+                // call with its output by position; keep the pair contiguous.
+                object = ResponseTranslation.normalizeToolCallOrder(object)
                 body = try JSONSerialization.data(withJSONObject: object)
                 if !provider.isResponsesBackend {
                     guard ["/responses", "/v1/responses"].contains(path) else {

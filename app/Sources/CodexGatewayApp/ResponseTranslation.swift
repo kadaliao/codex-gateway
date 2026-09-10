@@ -103,6 +103,49 @@ enum ResponseTranslation {
         return messages
     }
 
+    /// Third-party Responses backends pair a `function_call` with its
+    /// `function_call_output` by position. When a model returns visible text and a
+    /// tool call in one turn, Codex emits `function_call`, then that assistant
+    /// message, then the output — such backends answer "No tool output found for
+    /// tool call <id>". Move the interleaved assistant messages in front of the
+    /// call so the pair stays contiguous.
+    static func normalizeToolCallOrder(_ body: [String: Any]) -> [String: Any] {
+        func type(_ item: Any) -> String? { (item as? [String: Any])?["type"] as? String }
+        func callID(_ item: Any) -> String? {
+            let item = item as? [String: Any]
+            return (item?["call_id"] as? String) ?? (item?["id"] as? String)
+        }
+        guard let items = body["input"] as? [Any] else { return body }
+        var ordered: [Any] = []
+        ordered.reserveCapacity(items.count)
+        var index = 0
+        while index < items.count {
+            guard type(items[index]) == "function_call" else { ordered.append(items[index]); index += 1; continue }
+            var calls: [Any] = [], callIDs = Set<String>()
+            var next = index
+            while next < items.count, type(items[next]) == "function_call" {
+                if let id = callID(items[next]) { callIDs.insert(id) }
+                calls.append(items[next]); next += 1
+            }
+            var texts: [Any] = [], afterText = next
+            while afterText < items.count, type(items[afterText]) == "message",
+                  (items[afterText] as? [String: Any])?["role"] as? String == "assistant" {
+                texts.append(items[afterText]); afterText += 1
+            }
+            let answered = afterText < items.count && type(items[afterText]) == "function_call_output"
+                && callIDs.contains(callID(items[afterText]) ?? "")
+            if !texts.isEmpty, answered {
+                ordered.append(contentsOf: texts); ordered.append(contentsOf: calls); index = afterText
+            } else {
+                ordered.append(contentsOf: calls); index = next
+            }
+        }
+        guard ordered.count == items.count else { return body }
+        var body = body
+        body["input"] = ordered
+        return body
+    }
+
     static func responsesToChatTools(_ body: [String: Any]) -> [Any] {
         var tools: [Any] = []
         for tool in (body["tools"] as? [Any]) ?? [] {
